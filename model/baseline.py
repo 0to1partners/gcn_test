@@ -41,12 +41,22 @@ if __name__ == '__main__':
     seed_everything(42)
     # Test
     gnn = GNN(2, 2, 2, 2)
-    x = torch.randn(2,2)
-    x = torch.tensor([[1], [10]], dtype=torch.float)
+    
+    # x = torch.randn(5,5)
+    x = torch.ones((5,5))
+    x = torch.tensor([
+        [1,],
+        [2,],
+        [3,],
+        [4,],
+        [5,]
+    ], dtype=torch.float)
+    # x = torch.tensor([[1], [10]], dtype=torch.float)
 
-    b = torch.tensor([[1, 2], [3, 4]], dtype=torch.float)
+    # b = torch.tensor([[1, 2], [3, 4]], dtype=torch.float)
 
-    print(torch.spmm(b,x))
+    print(x)
+    
     adj = torch.tensor([
         [0,1,0,0,0],
         [1,0,1,1,0],
@@ -54,6 +64,19 @@ if __name__ == '__main__':
         [0,1,0,0,1],
         [0,0,0,1,0],
         ], dtype=torch.float)
+
+    degree = torch.sum(adj, dim=1)
+    degree = torch.diag(degree)
+    print(degree)
+
+    laplacian = degree - adj
+    # adj2 = torch.sparse()
+
+    print(laplacian)
+    normalized_laplacian = torch.inverse(degree) @ laplacian
+    print(normalized_laplacian)
+
+    # print(torch.spmm(adj,x))
     # print(gnn(x, adj))
 
 # %%
