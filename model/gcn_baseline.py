@@ -14,13 +14,13 @@ from tqdm.auto import tqdm
 
 
 class AdjacencyModel(nn.Module):
-    def __init__(self, embedding_dim, node_cnt, hidden_dim, num_layers, embedding_dict=None):
+    def __init__(self, adj_embedding_dim, node_cnt, hidden_dim, adj_num_layers, embedding_dict):
         '''
         args
-        embedding_dim : embedding dimension 
+        adj_embedding_dim : embedding dimension 
         node_cnt : total node count
         hidden_dim : hidden dimension of each layer
-        num_layers : number of layers
+        adj_num_layers : number of layers
         embedding_dict : key is categorical tensor, value is cardinality
                 example {'month': 12, 'wday': 7, 'hour': 24}
 
@@ -39,24 +39,24 @@ class AdjacencyModel(nn.Module):
             self.embedding_list = embedding_dict.keys()
 
             for k, n in embedding_dict.items():
-                self.embeddings[k] = nn.Embedding(n, embedding_dim)
+                self.embeddings[k] = nn.Embedding(n, adj_embedding_dim)
 
             self.norm = nn.BatchNorm1d
         else:
             self.embedding_list = None
             self.latent = nn.Parameter(
-                torch.Tensor(1, embedding_dim).uniform_(0, 1))
+                torch.Tensor(1, adj_embedding_dim).uniform_(0, 1))
 
             self.norm = nn.InstanceNorm1d
 
         self.layers = nn.ModuleList()
 
-        if num_layers <= 1:
-            raise ValueError('num_layers must be greater than 1')
+        if adj_num_layers <= 1:
+            raise ValueError('adj_num_layers must be greater than 1')
 
-        for i in range(num_layers - 1):
+        for i in range(adj_num_layers - 1):
             if i == 0:
-                self.layers.append(nn.Linear(embedding_dim, hidden_dim))
+                self.layers.append(nn.Linear(adj_embedding_dim, hidden_dim))
             else:
                 self.layers.append(nn.Linear(hidden_dim, hidden_dim))
             self.layers.append(nn.ReLU())
@@ -188,10 +188,10 @@ class WeightedGraphModel(nn.Module):
         '''
         super(WeightedGraphModel, self).__init__()
 
-        self.adj_module = AdjacencyModel(embedding_dim=kwargs['adj_embedding_dim'],
+        self.adj_module = AdjacencyModel(adj_embedding_dim=kwargs['adj_embedding_dim'],
                                          node_cnt=kwargs['node_cnt'],
                                          hidden_dim=kwargs['adj_hidden_dim'],
-                                         num_layers=kwargs['adj_num_layers'],
+                                         adj_num_layers=kwargs['adj_num_layers'],
                                          embedding_dict=kwargs['adj_embedding_dict'])
 
         self.node_encoder = NodeEncoder(node_dim=kwargs['node_dim'],
@@ -243,7 +243,6 @@ if __name__ == '__main__':
                                 node_cnt=25,
                                 hidden_dim=128,
                                 num_layers=3)
-    # embedding_dict={'month': 12, 'wday': 7, 'hour': 24})
 
     tmp = adj_module()
     print(tmp.shape)
