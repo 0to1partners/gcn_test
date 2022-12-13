@@ -11,96 +11,14 @@ import torch.nn.functional as F
 import numpy as np
 from tqdm.auto import tqdm
 
+
+try:
+    from model.adjacency import AdjacencyModel, AdjacencyWithMP
+
+except:
+    from adjacency import AdjacencyModel, AdjacencyWithMP
+
 # %%
-
-class AdjacencyModel(nn.Module):
-    def __init__(self, adj_embedding_dim, node_cnt, hidden_dim, adj_num_layers, embedding_dict):
-        '''
-        args
-        adj_embedding_dim : embedding dimension 
-        node_cnt : total node count
-        hidden_dim : hidden dimension of each layer
-        adj_num_layers : number of layers
-        embedding_dict : key is categorical tensor, value is cardinality
-                example {'month': 12, 'wday': 7, 'hour': 24}
-
-        output
-            adjacency matrix : 
-                with embedding dict -> (batch_size, node_cnt, node_cnt) 
-                without -> (node_cnt, node_cnt)
-        '''
-
-        super().__init__()
-
-        self.embeddings = nn.ModuleDict()
-        self.node_cnt = node_cnt
-
-        if embedding_dict:
-            self.embedding_list = embedding_dict.keys()
-
-            for k, n in embedding_dict.items():
-                self.embeddings[k] = nn.Embedding(n, adj_embedding_dim)
-
-            self.norm = nn.BatchNorm1d
-        else:
-            self.embedding_list = None
-            self.latent = nn.Parameter(
-                torch.Tensor(1, adj_embedding_dim).uniform_(0, 1))
-
-            self.norm = nn.InstanceNorm1d
-
-        self.layers = nn.ModuleList()
-
-        if adj_num_layers <= 1:
-            raise ValueError('adj_num_layers must be greater than 1')
-
-        for i in range(adj_num_layers - 1):
-            if i == 0:
-                self.layers.append(nn.Linear(adj_embedding_dim, hidden_dim))
-            else:
-                self.layers.append(nn.Linear(hidden_dim, hidden_dim))
-            self.layers.append(nn.ReLU())
-            self.layers.append(self.norm(hidden_dim))
-
-        self.layers.append(nn.Linear(hidden_dim, self.node_cnt**2))
-
-    def forward(self, add_dict=None):
-        ''' 
-        args
-            add_dict : key is categorical tensor, value is cardinality
-                example {'month': (batch, seq, 1), 'wday': ... }
-
-        output 
-            adjacency matrix : (batch_size, seq, node_cnt, node_cnt)
-
-        '''
-
-        # if self.embedding_list:
-        if add_dict is None:
-            raise ValueError('Model need add_dict')
-        emb_list = []
-
-        batch = add_dict[list(add_dict.keys())[0]].shape[0]
-
-        for key, value in add_dict.items():
-            if key not in self.embedding_list:
-                raise ValueError(f'{key} is not in embedding list')
-
-            embedding = self.embeddings[key](value)
-            emb_list.append(embedding)
-
-        stacked = torch.stack(emb_list, dim=2)
-        x = torch.sum(stacked, dim=2)
-
-        b, s, e = x.shape
-
-        x = x.reshape(-1, e)
-        for layer in self.layers:
-            x = layer(x)
-
-        x = x.view(batch, -1, self.node_cnt, self.node_cnt).contiguous()
-
-        return x
 
 
 class NodeEncoder(nn.Module):
@@ -111,9 +29,6 @@ class NodeEncoder(nn.Module):
             hidden_dim : hidden dimension of each layer
             node_latent_dim : latent dimension of each node
             num_layers : number of layers
-
-        output
-            node latent : (batch_size, node_cnt, node_latent_dim)
         '''
         super().__init__()
 
@@ -129,6 +44,13 @@ class NodeEncoder(nn.Module):
         self.layers.append(nn.Linear(hidden_dim, node_latent_dim))
 
     def forward(self, x):
+        '''
+        args
+            x : (batch_size, sequence, node_cnt, node_dim)
+        output
+            node latent : (batch_size, sequence, node_cnt, node_latent_dim)
+        '''
+
         b, s, n, _ = x.shape
         x = x.reshape(b * s * n, -1)
 
@@ -140,6 +62,11 @@ class NodeEncoder(nn.Module):
 
 
 class NodeDecoder(nn.Module):
+    '''
+    description
+        decode node latent to node feature
+    '''
+
     def __init__(self, node_latent_dim, hidden_dim, node_dim, num_layers):
         '''
         args
@@ -147,9 +74,6 @@ class NodeDecoder(nn.Module):
             hidden_dim : hidden dimension of each layer
             node_dim : output dimension
             num_layers : number of layers
-
-        output
-            node latent : (batch_size, node_cnt, node_dim)
         '''
         super().__init__()
 
@@ -165,26 +89,50 @@ class NodeDecoder(nn.Module):
         self.layers.append(nn.Linear(hidden_dim, node_dim))
 
     def forward(self, x):
-        if x.dim() == 3:
+        '''
+        args
+            x : (batch_size, sequence, node_cnt, node_latent_dim)
+                or (batch_size, node_cnt, node_latent_dim)
+        output
+            node latent : (batch_size, sequence, node_cnt, node_dim)
+                            or (batch_size, node_cnt, node_dim)
+        '''
+        is_sequence = (x.dim() == 4)
+
+        if is_sequence == False:
             x = x.unsqueeze(1)
-            
+
         b, s, n, _ = x.shape
         x = x.reshape(b * s * n, -1)
 
         for layer in self.layers:
             x = layer(x)
 
-        x = x.reshape(b, s, n, -1)
+        if is_sequence == False:
+            x = x.reshape(b, n, -1)
+        else:
+            x = x.reshape(b, s, n, -1)
         return x
 
 
 class GraphTemporalConv(nn.Module):
+    ''' 
+    description
+        Dense Graph Layer With 1D Convolution Layer
+        2 * Dense Graph Layer + 2 * 1D Convolution Layer
+    '''
+
     def __init__(self, hidden_dim, node_cnt, seq_len):
+        '''
+        args
+            hidden_dim : hidden dimension of each layer
+            node_cnt : number of nodes
+            seq_len : length of sequence
+        '''
         super().__init__()
 
         self.kernel_size = 5
         self.padding = self.kernel_size // 2
-        # self.stride = self.kernel_size // 2
 
         self.gcn1 = DenseGraphConv(
             hidden_dim, hidden_dim, aggr='mean', bias=False)
@@ -216,8 +164,8 @@ class GraphTemporalConv(nn.Module):
         x = x.reshape(b * s, n, c)
         adj = adj.reshape(b * s, n, n)
 
-        x = F.relu(self.gcn1(x, adj)) # b * s, n, c
-        x = self.batch_norm1(x) 
+        x = F.relu(self.gcn1(x, adj))  # b * s, n, c
+        x = self.batch_norm1(x)
         x = F.relu(self.gcn2(x, adj))
         x = self.batch_norm2(x)
 
@@ -226,7 +174,7 @@ class GraphTemporalConv(nn.Module):
         x = x.permute(0, 2, 3, 1).contiguous()  # b, n, c, s
         x = x.view(b * n, c, s)  # b * n, c, s
 
-        x = F.relu(self.conv1(x)) # b * n, c, s
+        x = F.relu(self.conv1(x))  # b * n, c, s
         x = self.batch_norm3(x)
         x = F.relu(self.conv2(x))
         x = self.batch_norm4(x)
@@ -236,7 +184,12 @@ class GraphTemporalConv(nn.Module):
         return x
 
 
-class WeightedGraphModel(nn.Module):
+class PopulationWeightedGraphModel(nn.Module):
+    '''
+    description
+        Graph Model with Moving Population
+    '''
+
     def __init__(self, **kwargs):
         '''
         args
@@ -253,19 +206,13 @@ class WeightedGraphModel(nn.Module):
             node_num_layers : number of layers of node encoder and decoder
 
             num_graph_layers : number of graph_layers
-
-        output
-            node latent : (batch_size, node_cnt, node_latent_dim)
-            node_recon : (batch_size, node_cnt, node_dim)
-
         '''
-        super(WeightedGraphModel, self).__init__()
+        super().__init__()
 
-        self.adj_module = AdjacencyModel(adj_embedding_dim=kwargs['adj_embedding_dim'],
-                                         node_cnt=kwargs['node_cnt'],
-                                         hidden_dim=kwargs['adj_hidden_dim'],
-                                         adj_num_layers=kwargs['adj_num_layers'],
-                                         embedding_dict=kwargs['adj_embedding_dict'])
+        self.adj_module = AdjacencyWithMP(input_dim=kwargs['node_dim'],
+                                          hidden_dim=kwargs['adj_hidden_dim'],
+                                          output_dim=kwargs['adj_embedding_dim'],
+                                          adj_num_layers=kwargs['adj_num_layers'])
 
         self.node_encoder = NodeEncoder(node_dim=kwargs['node_dim'],
                                         hidden_dim=kwargs['node_hidden_dim'],
@@ -281,26 +228,39 @@ class WeightedGraphModel(nn.Module):
                                             node_cnt=kwargs['node_cnt'],
                                             seq_len=kwargs['seq_len'])
 
-        self.aggregator = nn.Conv1d(kwargs['seq_len'], kwargs['pred_len'], 
+        self.aggregator = nn.Conv1d(kwargs['seq_len'], kwargs['pred_len'],
                                     kernel_size=1)
 
     def forward(self, x, add_dict=None):
-        
+        '''
+        args
+            x : (batch_size, node_cnt, node_dim)
+            add_dict : additional dictionary
+
+        output
+            x : (batch_size, node_cnt, pred_len, node_dim)
+        '''
+
         x = self.node_encoder(x)
         adj = self.adj_module(add_dict)
 
         b, s, n, c = x.shape
 
-        x = self.graph_conv(x, adj) # (batch_size, seq, node_cnt, node_latent_dim)
+        # (batch_size, seq, node_cnt, node_latent_dim)
+        x = self.graph_conv(x, adj)
 
+        # (batch_size, node_cnt, seq, node_latent_dim)
+        x = x.permute(0, 2, 1, 3).contiguous()
+        # (batch_size * node_cnt, seq, node_latent_dim)
+        x = x.view(b * n, s, c)
+        # (batch_size * node_cnt, node_latent_dim, pred_len)
+        x = self.aggregator(x)
 
-        x = x.permute(0, 2, 1, 3).contiguous() # (batch_size, node_cnt, seq, node_latent_dim)
-        x = x.view(b * n, s, c) # (batch_size * node_cnt, seq, node_latent_dim)
-        x = self.aggregator(x) # (batch_size * node_cnt, node_latent_dim, pred_len)
+        # (batch_size * node_cnt, pred_len, node_latent_dim)
+        x = x.permute(0, 2, 1).contiguous()
+        # (batch_size, pred_len, node_cnt, node_latent_dim)
+        x = x.view(b, -1, n, c)
 
-        x = x.permute(0, 2, 1).contiguous() # (batch_size * node_cnt, pred_len, node_latent_dim)
-        x = x.view(b, -1, n, c) # (batch_size, pred_len, node_cnt, node_latent_dim)
-        
         recon = self.node_decoder(x)
 
         return x, recon
@@ -379,8 +339,6 @@ if __name__ == '__main__':
     # adj = torch.randn(batch, seq, node_cnt, node_cnt)
     # tmp = model(x_input, adj)
     # print(tmp.shape)
-
-
 
     print('Intergrated Architecture test', end=': \t')
 
