@@ -1,5 +1,4 @@
 # %%
-
 from torch import nn
 from torch.nn import MSELoss
 from torch.optim import Adam
@@ -11,17 +10,19 @@ import torch.nn.functional as F
 import numpy as np
 from tqdm.auto import tqdm
 
-
 try:
     from model.adjacency import AdjacencyModel, AdjacencyWithMP
 
 except:
     from adjacency import AdjacencyModel, AdjacencyWithMP
 
-# %%
 
 
 class NodeEncoder(nn.Module):
+    '''
+    description
+        encode node feature to node latent
+    '''
     def __init__(self, node_dim, hidden_dim, node_latent_dim, num_layers):
         '''
         args
@@ -31,7 +32,6 @@ class NodeEncoder(nn.Module):
             num_layers : number of layers
         '''
         super().__init__()
-
         self.layers = nn.ModuleList()
 
         for i in range(num_layers - 1):
@@ -50,7 +50,6 @@ class NodeEncoder(nn.Module):
         output
             node latent : (batch_size, sequence, node_cnt, node_latent_dim)
         '''
-
         b, s, n, _ = x.shape
         x = x.reshape(b * s * n, -1)
 
@@ -66,7 +65,6 @@ class NodeDecoder(nn.Module):
     description
         decode node latent to node feature
     '''
-
     def __init__(self, node_latent_dim, hidden_dim, node_dim, num_layers):
         '''
         args
@@ -155,18 +153,25 @@ class GraphTemporalConv(nn.Module):
         '''
         args
             x : (batch_size, seq, node_cnt, in_channels)
+            adj : (batch_size, seq, adj_channel, node_cnt, node_cnt)
 
         output
             x : (batch_size, seq, node_cnt, out_channels)
         '''
         b, s, n, c = x.shape  # b, s, n, c
+        adj_c = adj.shape[2]
 
         x = x.reshape(b * s, n, c)
-        adj = adj.reshape(b * s, n, n)
 
-        x = F.relu(self.gcn1(x, adj))  # b * s, n, c
+        if adj_c == 1:
+            adj = adj.repeat(1, 1, 2, 1, 1)
+
+        adj = adj.permute(2, 0, 1, 3, 4).contiguous()  # b, s, n, n, c
+        adj = adj.view(2, b * s, n, n)
+
+        x = F.relu(self.gcn1(x, adj[0]))  # b * s, n, c
         x = self.batch_norm1(x)
-        x = F.relu(self.gcn2(x, adj))
+        x = F.relu(self.gcn2(x, adj[1]))
         x = self.batch_norm2(x)
 
         x = x.reshape(b, s, n, c)
@@ -196,7 +201,6 @@ class PopulationWeightedGraphModel(nn.Module):
             adj_hidden_dim : hidden dimension of each layer of adjacency model
             adj_num_layers : number of layers of adjacency model
             adj_embedding_dim : embedding dimension of adjacency model
-            adj_embedding_dict : key is categorical tensor, value is cardinality
 
             node_dim : dimension of original node
             node_cnt : total node count            
@@ -209,9 +213,10 @@ class PopulationWeightedGraphModel(nn.Module):
         '''
         super().__init__()
 
-        self.adj_module = AdjacencyWithMP(input_dim=kwargs['node_dim'],
+        self.adj_module = AdjacencyWithMP(input_dim=kwargs['adj_input_dim'],
                                           hidden_dim=kwargs['adj_hidden_dim'],
                                           output_dim=kwargs['adj_embedding_dim'],
+                                          adj_channel=kwargs['adj_channel'],
                                           adj_num_layers=kwargs['adj_num_layers'])
 
         self.node_encoder = NodeEncoder(node_dim=kwargs['node_dim'],
@@ -228,148 +233,137 @@ class PopulationWeightedGraphModel(nn.Module):
                                             node_cnt=kwargs['node_cnt'],
                                             seq_len=kwargs['seq_len'])
 
-        self.aggregator = nn.Conv1d(kwargs['seq_len'], kwargs['pred_len'],
-                                    kernel_size=1)
+        self.aggregator = nn.Conv1d(
+            kwargs['seq_len'], kwargs['pred_len'], kernel_size=1)
 
-    def forward(self, x, add_dict=None):
+    def forward(self, x, moving_pop):
         '''
         args
-            x : (batch_size, node_cnt, node_dim)
-            add_dict : additional dictionary
-
+            x : (batch_size, sequence, node_cnt, node_dim)
+            moving_pop : (batch_size, sequence, node_cnt, node_dim)
         output
-            x : (batch_size, node_cnt, pred_len, node_dim)
+            x : (batch_size, pred_len ,node_cnt, , node_dim)
         '''
 
+        # (batch_size, seq, node_cnt, node_latent_dim)
         x = self.node_encoder(x)
-        adj = self.adj_module(add_dict)
-
+        # (batch_size, seq, adj_channel, node_cnt, node_cnt)
+        adj, adj_recon = self.adj_module(moving_pop)
         b, s, n, c = x.shape
 
         # (batch_size, seq, node_cnt, node_latent_dim)
         x = self.graph_conv(x, adj)
-
         # (batch_size, node_cnt, seq, node_latent_dim)
         x = x.permute(0, 2, 1, 3).contiguous()
         # (batch_size * node_cnt, seq, node_latent_dim)
         x = x.view(b * n, s, c)
-        # (batch_size * node_cnt, node_latent_dim, pred_len)
-        x = self.aggregator(x)
 
-        # (batch_size * node_cnt, pred_len, node_latent_dim)
+        x = self.aggregator(x)  # (batch_size * node_cnt, 1, node_latent_dim)
+        # (batch_size * node_cnt, node_latent_dim, seq)
         x = x.permute(0, 2, 1).contiguous()
+
         # (batch_size, pred_len, node_cnt, node_latent_dim)
         x = x.view(b, -1, n, c)
+        # (batch_size, pred_len, node_cnt, node_dim)
+        y = self.node_decoder(x)
 
-        recon = self.node_decoder(x)
-
-        return x, recon
+        return x, y
 
 
-# %%
 if __name__ == '__main__':
     '''
     test code
     '''
 
-    print('Adjacency without embedding dict test', end=': \t')
-    adj_module = AdjacencyModel(adj_embedding_dim=10,
-                                node_cnt=25,
-                                hidden_dim=128,
-                                adj_num_layers=3,
-                                embedding_dict={'month': 12, 'wday': 7})
-    batch = 16
+    hp = {
+        'batch': 3,
+        'pred_len': 1,
 
-    add_dict = {'month': torch.randint(0, 12, (batch, 12, )),
-                'wday': torch.randint(0, 7, (batch, 12, )),
-                }
+        'adj_hidden_dim': 8,
+        'adj_num_layers': 2,
+        'adj_embedding_dim': 2,
+        'adj_channel': 1,
 
-    tmp = adj_module(add_dict)
-    print(tmp.shape)
-
-    # print('Adjacency with embedding dict test', end=': \t')
-    # adj_module = AdjacencyModel(adj_embedding_dim=10,
-    #                             node_cnt=25,
-    #                             hidden_dim=128,
-    #                             adj_num_layers=3,
-    #                             embedding_dict={'month': 12, 'wday': 7, 'hour': 24})
-
-    # batch = 16
-    # seq = 10
-    # add_dict = {'month': torch.randint(0, 12, (batch, 10,)),
-    #             'wday': torch.randint(0, 7, (batch, 10,)),
-    #             'hour': torch.randint(0, 24, (batch, 10,))}
-
-    # tmp = adj_module(add_dict)
-    # print(tmp.shape)
-
-    # batch = 16
-    # seq = 10
-
-    # print('Node encoder test', end=': \t')
-    # encoder = NodeEncoder(node_dim=28,
-    #                       hidden_dim=128,
-    #                       node_latent_dim=16,
-    #                       num_layers=3)
-    # x_input = torch.randn(batch, seq,25, 28)
-    # output = encoder(x_input)
-    # print(output.shape)
-
-    # print('Node decoder test', end=': \t')
-    # decoder = NodeDecoder(node_latent_dim=16,
-    #                       hidden_dim=128,
-    #                       node_dim=28,
-    #                       num_layers=3)
-
-    # tmp = decoder(output)
-    # print(tmp.shape)
-
-    # print('Encoder, Decoder Connection test', end=': \t')
-    # tmp = decoder(encoder(x_input))
-    # print(tmp.shape)
-
-    # print('Graph Conv test', end=': \t')
-    # seq = 24
-    # batch = 4
-    # node_cnt = 25
-    # emb = 10
-    # model = GraphTemporalConv(hidden_dim=emb, node_cnt=node_cnt, seq_len=seq)
-
-    # x_input = torch.randn(batch, seq, node_cnt, emb)
-    # adj = torch.randn(batch, seq, node_cnt, node_cnt)
-    # tmp = model(x_input, adj)
-    # print(tmp.shape)
-
-    print('Intergrated Architecture test', end=': \t')
-
-    args = {
-        'adj_hidden_dim': 128,
-        'adj_num_layers': 3,
-        'adj_embedding_dim': 8,
-        'adj_embedding_dict': {'month': 12, 'wday': 7, 'hour': 24},
+        'adj_input_dim': 20,
+        'adj_output_dim': 2,
 
         'node_dim': 28,
         'node_cnt': 25,
         'node_latent_dim': 16,
-        'node_hidden_dim': 128,
+        'node_hidden_dim': 32,
         'node_num_layers': 3,
 
         # 'num_graph_layers': 3,
         'seq_len': 24,
-        'pred_len': 12,
+        'pred_len': 1,
     }
-    model = WeightedGraphModel(**args)
 
-    batch = 4
-    seq = args['seq_len']
+    # Mok data
+    mp_data = torch.randn((hp['batch'],
+                           hp['seq_len'],
+                           hp['adj_input_dim'],
+                           hp['node_cnt'],
+                           hp['node_cnt']))
 
-    x_input = torch.randn(batch, seq, 25, 28)
-    add_dict = {'month': torch.randint(0, 12, (batch, seq,)),
-                'wday': torch.randint(0, 7, (batch, seq,)),
-                'hour': torch.randint(0, 24, (batch, seq,))}
+    node_data = torch.randn(hp['batch'],
+                            hp['seq_len'],
+                            hp['node_cnt'],
+                            hp['node_dim'])
 
-    tmp = model(x_input, add_dict)
+    node_latent_data = torch.randn(hp['batch'],
+                            hp['seq_len'],
+                            hp['node_cnt'],
+                            hp['node_latent_dim'])
 
+    adj = torch.randn(hp['batch'], hp['seq_len'],hp['adj_channel'],
+                        hp['node_cnt'], hp['node_cnt'])
+
+
+
+    #1. AdjacencyWithMP
+    print('#1 1 AdjacencyWithMP  test', end=': \t')
+    adj_module = AdjacencyWithMP(input_dim=hp['adj_input_dim'],
+                                 hidden_dim=hp['adj_hidden_dim'],
+                                 output_dim=hp['adj_output_dim'],
+                                 adj_channel=hp['adj_channel'],
+                                 adj_num_layers=hp['adj_num_layers'])
+
+    tmp = adj_module(mp_data)
+    print(tmp[0].shape, tmp[1].shape)
+
+
+    #2. NodeEncoder, NodeDecoder
+    print('#2 Node encoder test', end=': \t')
+    encoder = NodeEncoder(node_dim=hp['node_dim'],
+                          hidden_dim=hp['node_hidden_dim'],
+                          node_latent_dim=hp['node_latent_dim'],
+                          num_layers=hp['node_num_layers'])
+    output = encoder(node_data)
+    print(output.shape)
+
+    print('#3 Node decoder test', end=': \t')
+    decoder = NodeDecoder(node_latent_dim=hp['node_latent_dim'],
+                          hidden_dim=hp['node_hidden_dim'],
+                          node_dim=hp['node_dim'],
+                          num_layers=hp['node_num_layers'])
+    print(decoder(output).shape)
+
+    print('#4 Encoder, Decoder Connection test', end=': \t')
+    print(decoder(encoder(node_data)).shape)
+
+
+    #5. GraphTemporalConv
+    print('#5 Graph Conv test', end=': \t')
+    model = GraphTemporalConv(hidden_dim=hp['node_latent_dim'],
+                              node_cnt=hp['node_cnt'],
+                              seq_len=hp['seq_len'])
+    print(model(node_latent_data, adj).shape)
+
+
+    #6 Intergrated Architecture
+    print('#6 Intergrated Architecture test', end=': \t')
+    model = PopulationWeightedGraphModel(**hp)
+    tmp = model(node_data, mp_data)
     print(tmp[0].shape, tmp[1].shape)
 
 # %%
