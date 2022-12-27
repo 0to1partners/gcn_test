@@ -8,7 +8,7 @@ import torch.nn.functional as F
 
 class PopulationConverter(nn.Module):
     '''
-    Convert population to adjacency matrix and vice versa
+    Encode population to adjacency matrix and vice versa
     '''
     def __init__(self, input_dim, hidden_dim, output_dim, num_layers, adj_channel, is_gate):
         '''
@@ -62,7 +62,19 @@ class PopulationConverter(nn.Module):
 
 
 class AdjacencyWithMP(nn.Module):
+    '''
+    AdjacencyWithMP
+        Convert population to adjacency matrix and vice versa
+    '''
     def __init__(self, input_dim, hidden_dim, output_dim, adj_channel, adj_num_layers):
+        '''
+        args
+            input_dim : input dimension
+            hidden_dim : dimension of each hidden layer
+            output_dim : output dimension
+            adj_channel : number of adjacency matrix
+            adj_num_layers : number of layers
+        '''
         super().__init__()
 
         self.adj_channel = adj_channel

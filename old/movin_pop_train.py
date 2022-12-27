@@ -102,7 +102,6 @@ if __name__ == '__main__':
         'lr' : 0.001,
 
         # Hyperparameter
-
         'adj_hidden_dim': 8,
         'adj_num_layers': 2,
         'adj_embedding_dim': 2,

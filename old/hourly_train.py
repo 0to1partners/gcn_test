@@ -116,7 +116,7 @@ if __name__ == '__main__':
     logger = TensorBoardLogger('lightning_logs', name='baseline')
     lr_monitor = LearningRateMonitor(logging_interval='epoch')
 
-    model = TrainModule(**args) #
+    model = TrainModule(**args)
 
     trainer = Trainer(max_epochs=args['epochs'],
                       logger=logger,

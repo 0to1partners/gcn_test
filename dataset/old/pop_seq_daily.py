@@ -2,21 +2,17 @@
 import pandas as pd
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
-# from torch_geometric.data import Data, Dataset
-# from torch_geometric.loader import DataLoader
 import pytorch_lightning as pl
 import torch
 
 import argparse
 
-# %%
-
 
 class LifePopDailyDataset(Dataset):
     def __init__(self, data, seq_len, add_data, pred_len, is_pred=False, ):
         super().__init__()
-        
-        if len(data) < seq_len + 1 :
+
+        if len(data) < seq_len + 1:
             raise Exception('Data length is too short')
 
         self.data = data
@@ -40,7 +36,8 @@ class LifePopDailyDataset(Dataset):
         '''
         return torch.Tensor(self.data[idx:idx+self.seq_len]), \
             torch.tensor(self.add_data[idx+1: idx + self.seq_len+1], dtype=torch.int32), \
-            torch.Tensor(self.data[idx + self.seq_len + 1:idx+self.seq_len+self.pred_len+1])
+            torch.Tensor(self.data[idx + self.seq_len +
+                         1:idx+self.seq_len+self.pred_len+1])
 
     def collate(self, batch):
         x, add_data, y = map(list, zip(*batch))
@@ -48,10 +45,21 @@ class LifePopDailyDataset(Dataset):
         y = torch.stack(y)
         add_data = torch.stack(add_data)
 
-        add_dict = {k: add_data[:,:, i]
+        add_dict = {k: add_data[:, :, i]
                     for i, k in enumerate(self.add_keys)}
 
         return x, add_dict, y
+
+
+class LifePopDailyDatasetInference(LifePopDailyDataset):
+    def __len__(self):
+        return 1
+
+    def __getitem__(self, idx):
+        return torch.Tensor(self.data[:-1]), \
+            torch.tensor(self.add_data[1:], dtype=torch.int32), \
+            torch.Tensor(self.data[self.seq_len + 1:])
+
 
 
 class LifePopDailyModule(pl.LightningDataModule):
@@ -70,14 +78,20 @@ class LifePopDailyModule(pl.LightningDataModule):
     def setup(self, stage=None):
         if stage == 'fit':
             self.train_dataset = LifePopDailyDataset(self.data[:self.split + self.pred_len],
-                                                      add_data=self.add_data[:self.split],
-                                                      seq_len=self.seq_len,
-                                                      pred_len=self.pred_len)
+                                                     add_data=self.add_data[:self.split],
+                                                     seq_len=self.seq_len,
+                                                     pred_len=self.pred_len)
 
             self.val_dataset = LifePopDailyDataset(self.data[self.split:],
-                                                    add_data=self.add_data[self.split:],
-                                                    seq_len=self.seq_len,
-                                                    pred_len=self.pred_len)
+                                                   add_data=self.add_data[self.split:],
+                                                   seq_len=self.seq_len,
+                                                   pred_len=self.pred_len)
+        elif stage == 'predict':
+            self.predict_dataset = LifePopDailyDatasetInference(self.data[self.split:],
+                                                                add_data=self.add_data[self.split:],
+                                                                seq_len=self.seq_len,
+                                                                pred_len=self.pred_len,
+                                                                is_pred=True)
         else:
             raise Exception('Not implemented')
 
@@ -99,6 +113,15 @@ class LifePopDailyModule(pl.LightningDataModule):
             collate_fn=self.val_dataset.collate
         )
 
+    def predict_dataloader(self):
+        return DataLoader(
+            self.predict_dataset,
+            batch_size=self.batch_size,
+            shuffle=False,
+            num_workers=self.num_workers,
+            collate_fn=self.predict_dataset.collate
+        )
+
     @ staticmethod
     def add_model_specific_args(parent_parser):
         parser = argparse.ArgumentParser(
@@ -107,6 +130,7 @@ class LifePopDailyModule(pl.LightningDataModule):
         parser.add_argument('--num_workers', type=int, default=4)
         parser.add_argument('--validation_rate', type=float, default=0.1)
         return parser
+
 
 # %%
 if __name__ == '__main__':
@@ -119,9 +143,10 @@ if __name__ == '__main__':
                 'month': np.random.randint(0, 12, size=(len(data))), }
     add_data = pd.DataFrame(add_dict)
 
-    dm = LifePopDailyModule(data, add_data=add_data, seq_len=24, pred_len=240,
-                             validation_rate=0.2, batch_size=4)
+    dm = LifePopDailyModule(data, add_data=add_data, seq_len=24, pred_len=1,
+                            validation_rate=0.2, batch_size=4)
     dm.setup(stage='fit')
+    dm.setup(stage='predict')
 
     train_loader = dm.train_dataloader()
     val_loader = dm.val_dataloader()
@@ -140,4 +165,10 @@ if __name__ == '__main__':
 
     print(add_dict.keys())
 
-# %%
+    predict_loader = dm.predict_dataloader()
+
+    for x, add_dict, y in predict_loader:
+        print(x.shape)
+        print(add_dict['temp'].shape)
+        print(y.shape)
+    # %%

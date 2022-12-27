@@ -2,8 +2,6 @@
 import pandas as pd
 import numpy as np
 from torch.utils.data import Dataset, DataLoader
-# from torch_geometric.data import Data, Dataset
-# from torch_geometric.loader import DataLoader
 import pytorch_lightning as pl
 import torch
 
@@ -11,8 +9,22 @@ import argparse
 
 # %%
 
+class MovingPopDailyDataset(Dataset):
+    '''
+    MovingPopDailyDataset
 
-class MobingPopDailyDataset(Dataset):
+        Use moving population data and local confirmed case data to make a training dataset.
+
+        Moving Population Data
+            The moving population data is on a daily basis and there is data for each region for departure and destination.
+            Data has channels and channels are divided by sex and age.
+            shape : (time, region, region, channel : sex * age )
+
+        local confirmed case data
+            The local confirmed case data is on a daily basis and there is data for each region. (e.g. confirmed case of covid)
+            shape : (time, region, channel : covid + else )
+    '''
+
     def __init__(self, mp_data, covid_data, seq_len, pred_len, is_pred=False, ):
         super().__init__()
 
@@ -74,12 +86,12 @@ class MovingPopDailyModule(pl.LightningDataModule):
 
     def setup(self, stage=None):
         if stage == 'fit':
-            self.train_dataset = MobingPopDailyDataset(self.data[:self.split + self.pred_len],
+            self.train_dataset = MovingPopDailyDataset(self.data[:self.split + self.pred_len],
                                                        covid_data=self.covid_data[:self.split + self.pred_len],
                                                        seq_len=self.seq_len,
                                                        pred_len=self.pred_len)
 
-            self.val_dataset = MobingPopDailyDataset(self.data[self.split:],
+            self.val_dataset = MovingPopDailyDataset(self.data[self.split:],
                                                      covid_data=self.covid_data[self.split:],
                                                      seq_len=self.seq_len,
                                                      pred_len=self.pred_len)

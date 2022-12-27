@@ -11,96 +11,103 @@ import torch.nn.functional as F
 import numpy as np
 from tqdm.auto import tqdm
 
+
+try:
+    from model.adjacency import AdjacencyModel
+except:
+    from adjacency import AdjacencyModel
+
+
 # %%
 
-class AdjacencyModel(nn.Module):
-    def __init__(self, adj_embedding_dim, node_cnt, hidden_dim, adj_num_layers, embedding_dict):
-        '''
-        args
-        adj_embedding_dim : embedding dimension 
-        node_cnt : total node count
-        hidden_dim : hidden dimension of each layer
-        adj_num_layers : number of layers
-        embedding_dict : key is categorical tensor, value is cardinality
-                example {'month': 12, 'wday': 7, 'hour': 24}
+# class AdjacencyModel(nn.Module):
+#     def __init__(self, adj_embedding_dim, node_cnt, hidden_dim, adj_num_layers, embedding_dict):
+#         '''
+#         args
+#         adj_embedding_dim : embedding dimension 
+#         node_cnt : total node count
+#         hidden_dim : hidden dimension of each layer
+#         adj_num_layers : number of layers
+#         embedding_dict : key is categorical tensor, value is cardinality
+#                 example {'month': 12, 'wday': 7, 'hour': 24}
 
-        output
-            adjacency matrix : 
-                with embedding dict -> (batch_size, node_cnt, node_cnt) 
-                without -> (node_cnt, node_cnt)
-        '''
+#         output
+#             adjacency matrix : 
+#                 with embedding dict -> (batch_size, node_cnt, node_cnt) 
+#                 without -> (node_cnt, node_cnt)
+#         '''
 
-        super().__init__()
+#         super().__init__()
 
-        self.embeddings = nn.ModuleDict()
-        self.node_cnt = node_cnt
+#         self.embeddings = nn.ModuleDict()
+#         self.node_cnt = node_cnt
 
-        if embedding_dict:
-            self.embedding_list = embedding_dict.keys()
+#         if embedding_dict:
+#             self.embedding_list = embedding_dict.keys()
 
-            for k, n in embedding_dict.items():
-                self.embeddings[k] = nn.Embedding(n, adj_embedding_dim)
+#             for k, n in embedding_dict.items():
+#                 self.embeddings[k] = nn.Embedding(n, adj_embedding_dim)
 
-            self.norm = nn.BatchNorm1d
-        else:
-            self.embedding_list = None
-            self.latent = nn.Parameter(
-                torch.Tensor(1, adj_embedding_dim).uniform_(0, 1))
+#             self.norm = nn.BatchNorm1d
+#         else:
+#             self.embedding_list = None
+#             self.latent = nn.Parameter(
+#                 torch.Tensor(1, adj_embedding_dim).uniform_(0, 1))
 
-            self.norm = nn.InstanceNorm1d
+#             self.norm = nn.InstanceNorm1d
 
-        self.layers = nn.ModuleList()
+#         self.layers = nn.ModuleList()
 
-        if adj_num_layers <= 1:
-            raise ValueError('adj_num_layers must be greater than 1')
+#         if adj_num_layers <= 1:
+#             raise ValueError('adj_num_layers must be greater than 1')
 
-        for i in range(adj_num_layers - 1):
-            if i == 0:
-                self.layers.append(nn.Linear(adj_embedding_dim, hidden_dim))
-            else:
-                self.layers.append(nn.Linear(hidden_dim, hidden_dim))
-            self.layers.append(nn.ReLU())
-            self.layers.append(self.norm(hidden_dim))
+#         for i in range(adj_num_layers - 1):
+#             if i == 0:
+#                 self.layers.append(nn.Linear(adj_embedding_dim, hidden_dim))
+#             else:
+#                 self.layers.append(nn.Linear(hidden_dim, hidden_dim))
+#             self.layers.append(nn.ReLU())
+#             self.layers.append(self.norm(hidden_dim))
 
-        self.layers.append(nn.Linear(hidden_dim, self.node_cnt**2))
+#         self.layers.append(nn.Linear(hidden_dim, self.node_cnt**2))
 
-    def forward(self, add_dict=None):
-        ''' 
-        args
-            add_dict : key is categorical tensor, value is cardinality
-                example {'month': (batch, seq, 1), 'wday': ... }
+#     def forward(self, add_dict=None):
+#         ''' 
+#         args
+#             add_dict : key is categorical tensor, value is cardinality
+#                 example {'month': (batch, seq, 1), 'wday': ... }
 
-        output 
-            adjacency matrix : (batch_size, seq, node_cnt, node_cnt)
+#         output 
+#             adjacency matrix : (batch_size, seq, node_cnt, node_cnt)
 
-        '''
+#         '''
 
-        # if self.embedding_list:
-        if add_dict is None:
-            raise ValueError('Model need add_dict')
-        emb_list = []
+#         # if self.embedding_list:
+#         if add_dict is None:
+#             raise ValueError('Model need add_dict')
+#         emb_list = []
 
-        batch = add_dict[list(add_dict.keys())[0]].shape[0]
+#         batch = add_dict[list(add_dict.keys())[0]].shape[0]
 
-        for key, value in add_dict.items():
-            if key not in self.embedding_list:
-                raise ValueError(f'{key} is not in embedding list')
+#         for key, value in add_dict.items():
+#             if key not in self.embedding_list:
+#                 raise ValueError(f'{key} is not in embedding list')
 
-            embedding = self.embeddings[key](value)
-            emb_list.append(embedding)
+#             embedding = self.embeddings[key](value)
+#             emb_list.append(embedding)
 
-        stacked = torch.stack(emb_list, dim=2)
-        x = torch.sum(stacked, dim=2)
+#         stacked = torch.stack(emb_list, dim=2)
+#         x = torch.sum(stacked, dim=2)
 
-        b, s, e = x.shape
+#         b, s, e = x.shape
 
-        x = x.reshape(-1, e)
-        for layer in self.layers:
-            x = layer(x)
+#         x = x.reshape(-1, e)
+#         for layer in self.layers:
+#             x = layer(x)
 
-        x = x.view(batch, -1, self.node_cnt, self.node_cnt).contiguous()
+#         x = x.view(batch, -1, self.node_cnt, self.node_cnt).contiguous()
 
-        return x
+#         return x
 
 
 class NodeEncoder(nn.Module):
@@ -184,7 +191,6 @@ class GraphTemporalConv(nn.Module):
 
         self.kernel_size = 5
         self.padding = self.kernel_size // 2
-        # self.stride = self.kernel_size // 2
 
         self.gcn1 = DenseGraphConv(
             hidden_dim, hidden_dim, aggr='mean', bias=False)
