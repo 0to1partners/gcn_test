@@ -1,9 +1,6 @@
-
-#%%
+# %%
 import torch
 from torch.utils.data import Dataset
-
-
 
 
 class AuxSpatialDataset(Dataset):
@@ -11,6 +8,7 @@ class AuxSpatialDataset(Dataset):
     AuxSpatialDataset
         Dataset for using additional data for each region
     '''
+
     def __init__(self, spatial_data, columns, cnt_list, length):
         '''
         Args:
@@ -47,7 +45,6 @@ class AuxSpatialDataset(Dataset):
         for k, v in self.data.items():
             output[k] = v.expand(len(batch), -1)
         return output
-    
 
 
 class AuxTemporalDataset(Dataset):
@@ -55,6 +52,7 @@ class AuxTemporalDataset(Dataset):
     AuxTemporalDataset
         Dataset for using additional data for each time
     '''
+
     def __init__(self, temporal_data, columns, cnt_list, seq_len, length):
         '''
         Args:
@@ -100,6 +98,7 @@ class AuxTemporalDataset(Dataset):
         return output
 
 
+#########################################
 class MovingPopDailyDataset(Dataset):
     '''
     MovingPopDailyDataset
@@ -114,8 +113,12 @@ class MovingPopDailyDataset(Dataset):
         local confirmed case data
             The local confirmed case data is on a daily basis and there is data for each region. (e.g. confirmed case of covid)
             shape : (time, region, channel : covid + else )
+
     '''
-    def __init__(self, mp_data, covid_data, seq_len, pred_len ):
+
+    def __init__(self, mp_data, covid_data,
+
+                 seq_len, pred_len):
         '''
         Args:
             mp_data: moving population data
@@ -135,6 +138,7 @@ class MovingPopDailyDataset(Dataset):
         self.seq_len = seq_len
         self.pred_len = pred_len
 
+
     def __len__(self):
         '''
         Returns:
@@ -153,11 +157,101 @@ class MovingPopDailyDataset(Dataset):
         '''
         end = idx + self.seq_len
         return (
-            torch.tensor(self.mp_data[idx+1: end + 1], dtype=torch.float32), # x_adj
-            torch.tensor(self.covid_data[idx : end], dtype=torch.float32), # x_node
-            torch.tensor(self.covid_data[end: end+1], dtype=torch.float32) # y_node
+            torch.tensor(self.mp_data[idx+1: end + 1],
+                         dtype=torch.float32),  # x_adj
+            torch.tensor(self.covid_data[idx: end],
+                         dtype=torch.float32),  # x_node
+            torch.tensor(self.covid_data[end: end+1],
+                         dtype=torch.float32),  # y_node
         )
 
+class MovingPopDailyWithAuxDataset(Dataset):
+    '''
+    MovingPopDailyWithAuxDataset
+
+        Use moving population data and local confirmed case data to make a training dataset.
+
+        Moving Population Data
+            The moving population data is on a daily basis and there is data for each region for departure and destination.
+            Data has channels and channels are divided
+
+        AuxSpatialDataset
+            Dataset for using additional data for each region
+
+        AuxTemporalDataset
+            Dataset for using additional data for each time
+    '''
+
+    def __init__(self, mp_data, covid_data,
+                 spatial_data, spatial_columns, spatial_cardinalities,
+                 temporal_data, temporal_columns, temporal_cardinalities,
+                 seq_len, pred_len):
+        '''
+        Args:
+            mp_data: moving population data
+            covid_data: local confirmed case data
+            seq_len: length of input sequence
+            pred_len: length of prediction
+        '''
+        super().__init__()
+
+        if mp_data.shape[0] != covid_data.shape[0]:
+            raise Exception('Data length is not equal')
+        if len(mp_data) < seq_len + 1:
+            raise Exception('Data length is too short')
+
+        self.mp_data = mp_data
+        self.covid_data = covid_data
+        self.seq_len = seq_len
+        self.pred_len = pred_len
+
+        self.spatial = {}
+        for i, k in enumerate(spatial_columns):
+            dtype = torch.float32 if spatial_cardinalities[i] == 1 else torch.long
+            self.spatial[k] = torch.tensor(spatial_data[k].values, dtype=dtype)
+
+
+        self.temporal = {}
+        for i, k in enumerate(temporal_columns):
+            dtype = torch.float32 if temporal_cardinalities[i] == 1 else torch.long
+            self.temporal[k] = torch.tensor(temporal_data[k].values, dtype=dtype)
+
+    def __len__(self):
+        '''
+        Returns:
+            length of dataset
+        '''
+        return self.covid_data.shape[0] - self.seq_len - 1
+
+    def __getitem__(self, idx):
+        '''
+        Args:
+            idx: index of the first element in the sequence
+        Returns:
+            x_adj  : t-n+1 ~ t+1        (batch, seq_len, node_cnt, node_cnt)
+            x_node : t-n ~ t            (batch, seq_len, node_cnt, embedding_dim)
+            y_node : t+1 ~ t+1+pred     (batch, node_cnt, embedding_dim)
+            spatial : independent of time (batch, node_cnt, embedding_dim) 
+            temporal : independent of node (batch, seq_len, embedding_dim)
+        '''
+        end = idx + self.seq_len
+
+        # spatial = {}
+        # for k, v in self.spatial.items():
+            # spatial[k] = v.expand(len(batch), -1)
+        temporal = {}
+        for k, v in self.temporal.items():
+            temporal[k] = v[idx:idx+self.seq_len]
+    
+        return (
+            torch.tensor(self.mp_data[idx+1: end + 1], dtype=torch.float32),# x_adj
+            torch.tensor(self.covid_data[idx: end], dtype=torch.float32), # x_node
+            torch.tensor(self.covid_data[end: end+1], dtype=torch.float32), # y_node
+            self.spatial, # spatial
+            temporal # temporal
+        )
+
+# Test Code
 if __name__ == '__main__':
     args = {
         # Fixed
@@ -220,7 +314,6 @@ if __name__ == '__main__':
         spatial, args['aux_spatial_columns'], args['aux_spatial_cardinalities'], 10)
     b = DataLoader(a, batch_size=args['batch_size'], collate_fn=a.collate)
 
-
     for i in b:
         print(i.keys())
         break
@@ -233,3 +326,4 @@ if __name__ == '__main__':
         print(i.keys())
         break
 
+# %%

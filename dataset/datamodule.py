@@ -5,9 +5,11 @@ from torch.utils.data import DataLoader
 
 # custom datasets
 try:
-    from datasets import MovingPopDailyDataset, AuxTemporalDataset, AuxSpatialDataset
+    from datasets import MovingPopDailyDataset, AuxTemporalDataset, AuxSpatialDataset, \
+        MovingPopDailyWithAuxDataset
 except:
-    from dataset.datasets import MovingPopDailyDataset, AuxTemporalDataset, AuxSpatialDataset
+    from dataset.datasets import MovingPopDailyDataset, AuxTemporalDataset, \
+        AuxSpatialDataset, MovingPopDailyWithAuxDataset
 
 
 class MovingPopWithAuxDataModule(pl.LightningDataModule):
@@ -18,8 +20,8 @@ class MovingPopWithAuxDataModule(pl.LightningDataModule):
     '''
 
     def __init__(self, mp_data, covid_data,
-                 temporal_data, temporal_columns, temporal_cnt_list,
-                 spatial_data, spatial_columns, spatial_cnt_list,
+                 temporal_data, temporal_columns, temporal_cardinalities,
+                 spatial_data, spatial_columns, spatial_cardinalities,
                  seq_len, num_node, validation_rate, batch_size, num_workers=4):
         '''
         Args:
@@ -43,10 +45,10 @@ class MovingPopWithAuxDataModule(pl.LightningDataModule):
         self.covid_data = covid_data
         self.temporal_data = temporal_data
         self.temporal_columns = temporal_columns
-        self.temporal_cnt_list = temporal_cnt_list
+        self.temporal_cardinalities = temporal_cardinalities
         self.spatial_data = spatial_data
         self.spatial_columns = spatial_columns
-        self.spatial_cnt_list = spatial_cnt_list
+        self.spatial_cardinalities = spatial_cardinalities
         self.batch_size = batch_size
         self.num_node = num_node
         self.seq_len = seq_len
@@ -55,87 +57,72 @@ class MovingPopWithAuxDataModule(pl.LightningDataModule):
         self.pred_len = 1
 
         self.total_length = self.data.shape[0]
-        self.split = int( self.total_length * (1 - validation_rate))
+        self.split = int(self.total_length * (1 - validation_rate))
         self.train_length = self.split - self.seq_len
         self.val_length = self.total_length - self.split - self.seq_len - 1
-        
+
     def setup(self, stage=None):
         '''
         Assign train/val datasets for use in dataloaders
         '''
-        if stage == 'fit' :
-            self.train_dataset = MovingPopDailyDataset(self.data[:self.split + 1],
-                                                       covid_data=self.covid_data[:self.split + 1],
-                                                       seq_len=self.seq_len,
-                                                       pred_len=self.pred_len)
-            self.train_spatial = AuxSpatialDataset(self.spatial_data, self.spatial_columns,
-                                                   self.spatial_cnt_list,
-                                                   length=self.train_length)
-            self.train_temporal = AuxTemporalDataset(self.temporal_data[:self.split + self.pred_len],
-                                                     self.temporal_columns, self.temporal_cnt_list,
-                                                     seq_len=self.seq_len,
-                                                     length=self.train_length)
+        if stage == 'fit':
+            self.train_dataset = MovingPopDailyWithAuxDataset(self.data[:self.split + 1],
+                                                          covid_data=self.covid_data[:self.split + 1],
+                                                          spatial_data=self.spatial_data,
+                                                          spatial_columns=self.spatial_columns,
+                                                          spatial_cardinalities=self.spatial_cardinalities,
+                                                          temporal_data=self.temporal_data[:self.split +
+                                                                                           self.pred_len],
+                                                          temporal_columns=self.temporal_columns,
+                                                          temporal_cardinalities=self.temporal_cardinalities,
+                                                          seq_len=self.seq_len,
+                                                          pred_len=self.pred_len)
 
-            self.val_dataset = MovingPopDailyDataset(self.data[self.split:self.total_length],
-                                                     covid_data=self.covid_data[self.split:self.total_length],
-                                                     seq_len=self.seq_len, pred_len=self.pred_len)
-            self.val_spatial = AuxSpatialDataset(self.spatial_data, self.spatial_columns,
-                                                 self.spatial_cnt_list,
-                                                 length=self.val_length)
-            self.val_temporal = AuxTemporalDataset(self.temporal_data[self.split:self.total_length],
-                                                   self.temporal_columns, self.temporal_cnt_list,
-                                                   seq_len=self.seq_len,
-                                                   length=self.val_length)
-        elif stage == 'test' :
-            self.test_dataset = MovingPopDailyDataset(self.data[self.split:self.total_length],
-                                                     covid_data=self.covid_data[self.split:self.total_length],
-                                                     seq_len=self.seq_len, pred_len=self.pred_len)
-            self.test_spatial = AuxSpatialDataset(self.spatial_data, self.spatial_columns,
-                                                 self.spatial_cnt_list,
-                                                 length=self.val_length)
-            self.test_temporal = AuxTemporalDataset(self.temporal_data[self.split:self.total_length],
-                                                   self.temporal_columns, self.temporal_cnt_list,
-                                                   seq_len=self.seq_len,
-                                                   length=self.val_length)
-        else : 
+            self.val_dataset = MovingPopDailyWithAuxDataset(self.data[self.split:self.total_length],
+                                                        covid_data=self.covid_data[self.split:self.total_length],
+                                                        spatial_data=self.spatial_data,
+                                                        spatial_columns=self.spatial_columns,
+                                                        spatial_cardinalities=self.spatial_cardinalities,
+                                                        temporal_data=self.temporal_data[self.split:self.total_length],
+                                                        temporal_columns=self.temporal_columns,
+                                                        temporal_cardinalities=self.temporal_cardinalities,
+                                                        seq_len=self.seq_len,
+                                                        pred_len=self.pred_len)
+
+        elif stage == 'test':
+            self.test_dataset = MovingPopDailyWithAuxDataset(self.data[self.split:self.total_length],
+                                                         covid_data=self.covid_data[self.split:self.total_length],
+                                                         spatial_data=self.spatial_data,
+                                                         spatial_columns=self.spatial_columns,
+                                                         spatial_cardinalities=self.spatial_cardinalities,
+                                                         temporal_data=self.temporal_data[self.split:self.total_length],
+                                                         temporal_columns=self.temporal_columns,
+                                                         temporal_cardinalities=self.temporal_cardinalities,
+                                                         seq_len=self.seq_len,
+                                                         pred_len=self.pred_len)
+        else:
             raise ValueError('Invaild Stage : {stage}')
 
-
-
     def train_dataloader(self):
-        return [
-            DataLoader(self.train_dataset,
-                       batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers),
-            DataLoader(self.train_spatial, batch_size=self.batch_size,
-                       collate_fn=self.train_spatial.collate),
-            DataLoader(self.train_temporal, batch_size=self.batch_size,
-                       collate_fn=self.train_temporal.collate)
-        ]
+        return DataLoader(self.train_dataset,
+                          batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers)
     
     def val_dataloader(self):
-        return [
-            DataLoader(self.train_dataset,
-                       batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers),
-            DataLoader(self.train_spatial, batch_size=self.batch_size,
-                       collate_fn=self.train_spatial.collate),
-            DataLoader(self.train_temporal, batch_size=self.batch_size,
-                       collate_fn=self.train_temporal.collate)
-        ]
-    # def val_dataloader(self):
-    #     return [
-    #         DataLoader(self.val_dataset,
-    #                    batch_size=self.batch_size, shuffle=True, num_workers=self.num_workers),
-    #         DataLoader(self.val_spatial, batch_size=self.batch_size,
-    #                    collate_fn=self.val_spatial.collate),
-    #         DataLoader(self.val_temporal, batch_size=self.batch_size,
-    #                    collate_fn=self.val_temporal.collate)
-    #     ]
-        
+        return DataLoader(self.val_dataset,
+                          batch_size=self.batch_size, shuffle=False, num_workers=self.num_workers)
+    
+    def test_dataloader(self):
+        return DataLoader(self.test_dataset,
+                          batch_size=len(self.test_dataset), 
+                          shuffle=False, num_workers=self.num_workers)
+
+
 class MovingPopDailyModule(pl.LightningDataModule):
     '''
     MovingPopDailyModule
         DataModule for using only Moving Population Data
     '''
+
     def __init__(self, mp_data, covid_data, seq_len, pred_len, validation_rate, batch_size, num_workers=4):
         super().__init__()
         self.data = mp_data
@@ -160,6 +147,11 @@ class MovingPopDailyModule(pl.LightningDataModule):
                                                      covid_data=self.covid_data[self.split:],
                                                      seq_len=self.seq_len,
                                                      pred_len=self.pred_len)
+        elif stage == 'test':
+            self.test_dataset = MovingPopDailyDataset(self.data[self.split:],
+                                                     covid_data=self.covid_data[self.split:],
+                                                     seq_len=self.seq_len,
+                                                     pred_len=self.pred_len)
         else:
             raise Exception('Not implemented')
 
@@ -180,6 +172,14 @@ class MovingPopDailyModule(pl.LightningDataModule):
             num_workers=self.num_workers,
             # collate_fn=self.val_dataset.collate
         )
+    
+    def test_dataloader(self):
+        return DataLoader(
+            self.test_dataset,
+            batch_size=self.val_dataset.shape[0],
+            shuffle=False,
+            num_workers=self.num_workers,
+        )
 
     # @ staticmethod
     # def add_model_specific_args(parent_parser):
@@ -189,6 +189,7 @@ class MovingPopDailyModule(pl.LightningDataModule):
     #     parser.add_argument('--num_workers', type=int, default=4)
     #     parser.add_argument('--validation_rate', type=float, default=0.1)
     #     return parser
+
 
 # %%
 if __name__ == '__main__':
@@ -241,6 +242,8 @@ if __name__ == '__main__':
 
     import os
     import pandas as pd
+    import warnings
+    warnings.filterwarnings('ignore')
 
     os.listdir('../data/')
     spatial = pd.read_csv('../data/df_region_normalized.csv',
@@ -248,12 +251,12 @@ if __name__ == '__main__':
     temporal = pd.read_csv('../data/df_time_day_normalized.csv',
                            index_col=0, encoding='cp949')
 
-    mp_data = torch.randn((1005,
+    mp_data = torch.randn((978,
                            args['adj_input_dim'],
                            args['node_cnt'],
                            args['node_cnt']))
 
-    covid_data = torch.randn(1005,
+    covid_data = torch.randn(978,
                              args['node_cnt'],
                              args['node_dim'])
 
@@ -262,10 +265,10 @@ if __name__ == '__main__':
         covid_data=covid_data,
         temporal_data=temporal,
         temporal_columns=args['aux_temporal_columns'],
-        temporal_cnt_list=args['aux_temporal_cardinalities'],
+        temporal_cardinalities=args['aux_temporal_cardinalities'],
         spatial_data=spatial,
         spatial_columns=args['aux_spatial_columns'],
-        spatial_cnt_list=args['aux_spatial_cardinalities'],
+        spatial_cardinalities=args['aux_spatial_cardinalities'],
         batch_size=args['batch_size'],
         num_node=args['node_cnt'],
         seq_len=args['seq_len'],
@@ -277,9 +280,29 @@ if __name__ == '__main__':
     dataset.setup(stage='test')
     a = dataset.train_dataloader()
     b = dataset.val_dataloader()
-    # c = dataset.test_dataloader()
+    c = dataset.test_dataloader()
 
-    print(len(a[0]), len(a[1]), len(a[2]))
-    print(len(b[0]), len(b[1]), len(b[2]))
-    # print(len(c[0]), len(c[1]), len(c[2]))
+    for batch in a:
+        print(batch[0].shape, batch[0].dtype)
+        print(batch[1].shape, batch[1].dtype)
+        print(batch[2].shape, batch[2].dtype)
+        print(batch[3]['cnt_worker_male_2019'].shape, batch[3]['cnt_worker_male_2019'].dtype)
+        print(batch[4]['day'].shape, batch[4]['day'].dtype)
+        break
+
+    for batch in b:
+        print(batch[0].shape)
+        print(batch[1].shape)
+        print(batch[2].shape)
+        print(batch[3]['cnt_worker_male_2019'].shape)
+        print(batch[4]['day'].shape)
+        break
+
+    for batch in c:
+        print(batch[0].shape)
+        print(batch[1].shape)
+        print(batch[2].shape)
+        print(batch[3]['cnt_worker_male_2019'].shape)
+        print(batch[4]['day'].shape)
+        break
 # %%
