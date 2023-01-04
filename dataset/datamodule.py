@@ -89,7 +89,7 @@ class MovingPopWithAuxDataModule(pl.LightningDataModule):
                                                         seq_len=self.seq_len,
                                                         pred_len=self.pred_len)
 
-        elif stage == 'test':
+        elif stage in ('test', 'predict'):
             self.test_dataset = MovingPopDailyWithAuxDataset(self.data[self.split:self.total_length],
                                                          covid_data=self.covid_data[self.split:self.total_length],
                                                          spatial_data=self.spatial_data,
@@ -115,6 +115,12 @@ class MovingPopWithAuxDataModule(pl.LightningDataModule):
         return DataLoader(self.test_dataset,
                           batch_size=len(self.test_dataset), 
                           shuffle=False, num_workers=self.num_workers)
+
+    def predict_dataloader(self):
+        return DataLoader(self.test_dataset,
+                          batch_size=len(self.test_dataset), 
+                          shuffle=False, num_workers=self.num_workers)
+
 
 
 class MovingPopDailyModule(pl.LightningDataModule):

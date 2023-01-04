@@ -40,14 +40,14 @@ class TrainModule(pl.LightningModule):
         self.criterion = nn.MSELoss()
         self.lr = kwargs['lr']
 
-    def forward(self, x, covid):
-        y = self.model(x, covid)
+    def forward(self, x, covid, spatial, temporal):
+        y = self.model(x, covid, spatial, temporal)
         return y
 
     def training_step(self, batch, batch_idx):
         adj, x, y, spatial, temporal = batch
 
-        _, y_hat = self(x, adj)
+        _, y_hat = self(x, adj, spatial, temporal)
         loss = self.criterion(y_hat, y)
 
         self.log('train_loss', loss)
@@ -60,7 +60,7 @@ class TrainModule(pl.LightningModule):
     def validation_step(self, batch, batch_idx):
         adj, x, y, spatial, temporal = batch
         
-        _, y_hat = self(x, adj)
+        _, y_hat = self(x, adj, spatial, temporal)
         loss = self.criterion(y_hat, y)
 
         self.log('val_loss', loss)
@@ -76,9 +76,11 @@ class TrainModule(pl.LightningModule):
         result = []
         b = x.shape[0]
         x = x[0:1]
+        spatial = { k: v[0:1] for k, v in spatial.items()}
 
         for i in range(b):
-            _, y_hat = self(x, adj[i:i+1])
+            temporal_i = { k: v[i:i+1] for k, v in temporal.items()}
+            _, y_hat = self(x, adj[i:i+1], spatial, temporal_i)
             result.append(y_hat)
             x = torch.cat([x[:,1:], y_hat], dim=1)
 
@@ -87,11 +89,29 @@ class TrainModule(pl.LightningModule):
         self.log('test_sse', sse)
 
 
+    def predict_step(self, batch, batch_idx):
+        adj, x, y, spatial, temporal = batch
+
+        result = []
+        b = x.shape[0]
+        x = x[0:1]
+
+        spatial = { k: v[0:1] for k, v in spatial.items()}
+
+        for i in range(b):
+            temporal_i = { k: v[i:i+1] for k, v in temporal.items()}
+            _, y_hat = self(x, adj[i:i+1], spatial, temporal_i)
+            result.append(y_hat)
+            x = torch.cat([x[:,1:], y_hat], dim=1)
+
+        y_hat = torch.cat(result, dim=0)
+        return y, y_hat, adj
+
+
     def configure_optimizers(self):
         optimizer = Adam(self.parameters(), lr=self.hparams['lr'])
         scheduler = CosineAnnealingLR(optimizer, T_max=10)
         return [optimizer], [scheduler]
-
 
     def validation_epoch_end(self, outputs):
         total_length = sum([x['length'] for x in outputs])
@@ -103,8 +123,6 @@ class TrainModule(pl.LightningModule):
             self.log(f'mse_days_{i}', total_sse[i])
 
 
-    
-
     @staticmethod
     def add_model_specific_args(parent_parser):
         parser = parent_parser.add_argument_group('ModelArgs')
@@ -115,7 +133,7 @@ class TrainModule(pl.LightningModule):
         parser.add_argument('--adj_input_dim', type=int, default=20)
         parser.add_argument('--adj_output_dim', type=int, default=2)
 
-        parser.add_argument('--node_dim', type=int, default=28)
+        parser.add_argument('--node_dim', type=int, default=1)
         parser.add_argument('--node_cnt', type=int, default=25)
         parser.add_argument('--node_latent_dim', type=int, default=16)
         parser.add_argument('--node_hidden_dim', type=int, default=32)
@@ -124,7 +142,7 @@ class TrainModule(pl.LightningModule):
         parser.add_argument('--seq_len', type=int, default=24)
         parser.add_argument('--pred_len', type=int, default=1)
 
-        parser.add_argument('--temporal_embedding_dim', type=int, default=4)
+        parser.add_argument('--temporal_embedding_dim', type=int, default=20)
         parser.add_argument('--temporal_columns', type=list, default=[
             'day',
             'holiday',
@@ -132,7 +150,7 @@ class TrainModule(pl.LightningModule):
             ])
         parser.add_argument('--temporal_cardinalities', type=list, default=[7,2,1])
         
-        parser.add_argument('--spatial_embedding_dim', type=int, default=4)
+        parser.add_argument('--spatial_embedding_dim', type=int, default=16)
         parser.add_argument('--spatial_columns', type=list, default=[
             'cnt_worker_male_2019',
             'cnt_worker_female_2019',
@@ -149,11 +167,10 @@ class TrainModule(pl.LightningModule):
         parser = parent_parser.add_argument_group('TrainModule')
         parser.add_argument('--batch_size', type=int, default=64)
         parser.add_argument('--num_workers', type=int, default=4)
-        parser.add_argument('--num_epochs','-e', type=int)
+        parser.add_argument('--num_epochs','-e', type=int, default=1)
         parser.add_argument('--seed', type=int, default=42)
         parser.add_argument('--lr', type=int, default=0.001)
         return parent_parser
-    
 
 
 #%%
@@ -162,7 +179,7 @@ if __name__ == '__main__':
     parser = TrainModule.add_model_specific_args(parser)
     parser = TrainModule.add_train_specific_args(parser)
 
-    args = vars(parser.parse_args())
+    args = vars(parser.parse_args(args=[]))
     
     seed_everything(args['seed'])
 
@@ -202,6 +219,6 @@ if __name__ == '__main__':
     
     trainer.fit(model, data_module)
 
-    a = trainer.test(model, data_module)
+    trainer.test(model, data_module)
+    a = trainer.predict(model, data_module)
 
-# %%

@@ -243,8 +243,13 @@ class PopulationWeightedGraphModel(nn.Module):
                                             node_cnt=kwargs['node_cnt'],
                                             seq_len=kwargs['seq_len'])
 
-        self.aggregator = nn.Conv1d(
-            kwargs['seq_len'], kwargs['pred_len'], kernel_size=1)
+        # self.aggregator = nn.Conv1d(
+            # kwargs['seq_len'], kwargs['pred_len'], kernel_size=1)
+
+        self.aggregator_d = nn.Linear(kwargs['seq_len'], kwargs['pred_len'])
+        self.aggregator_g = nn.Linear(kwargs['seq_len'], kwargs['pred_len'])
+
+
 
     def forward(self, x, moving_pop, spatial = None, temporal = None):
         '''
