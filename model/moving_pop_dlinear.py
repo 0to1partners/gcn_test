@@ -1,7 +1,5 @@
 # %%
 from torch import nn
-from torch.nn import MSELoss
-from torch.optim import Adam
 from torch_geometric.nn.dense import DenseGraphConv
 from torch_geometric.nn.norm import LayerNorm, BatchNorm
 
@@ -11,187 +9,18 @@ import numpy as np
 from tqdm.auto import tqdm
 
 try:
+    from model.modules import DecompositionLayer, NodeEncoder, NodeDecoder, GraphTemporalConv
     from model.additional_info import AdditionalInfo
     from model.adjacency import AdjacencyModel, AdjacencyWithMP
 
 except:
+    from modules import DecompositionLayer, NodeEncoder, NodeDecoder, GraphTemporalConv
     from additional_info import AdditionalInfo
     from adjacency import AdjacencyModel, AdjacencyWithMP
 
 
 
-class NodeEncoder(nn.Module):
-    '''
-    description
-        encode node feature to node latent
-    '''
-    def __init__(self, node_dim, hidden_dim, node_latent_dim, num_layers):
-        '''
-        args
-            input_dim : input dimension
-            hidden_dim : hidden dimension of each layer
-            node_latent_dim : latent dimension of each node
-            num_layers : number of layers
-        '''
-        super().__init__()
-        self.layers = nn.ModuleList()
-
-        for i in range(num_layers - 1):
-            input_dim = hidden_dim if i > 0 else node_dim
-
-            self.layers.append(nn.Linear(input_dim, hidden_dim, bias=False))
-            self.layers.append(nn.ReLU())
-            self.layers.append(nn.BatchNorm1d(hidden_dim))
-
-        self.layers.append(nn.Linear(hidden_dim, node_latent_dim))
-
-    def forward(self, x):
-        '''
-        args
-            x : (batch_size, sequence, node_cnt, node_dim)
-        output
-            node latent : (batch_size, sequence, node_cnt, node_latent_dim)
-        '''
-        b, s, n, _ = x.shape
-        x = x.reshape(b * s * n, -1)
-
-        for layer in self.layers:
-            x = layer(x)
-
-        x = x.reshape(b, s, n, -1)
-        return x
-
-
-class NodeDecoder(nn.Module):
-    '''
-    description
-        decode node latent to node feature
-    '''
-    def __init__(self, node_latent_dim, hidden_dim, node_dim, num_layers):
-        '''
-        args
-            node_latent_dim : latent dimension of each node
-            hidden_dim : hidden dimension of each layer
-            node_dim : output dimension
-            num_layers : number of layers
-        '''
-        super().__init__()
-
-        self.layers = nn.ModuleList()
-
-        for i in range(num_layers - 1):
-            input_dim = hidden_dim if i > 0 else node_latent_dim
-
-            self.layers.append(nn.Linear(input_dim, hidden_dim, bias=False))
-            self.layers.append(nn.ReLU())
-            self.layers.append(nn.BatchNorm1d(hidden_dim))
-
-        self.layers.append(nn.Linear(hidden_dim, node_dim))
-
-    def forward(self, x):
-        '''
-        args
-            x : (batch_size, sequence, node_cnt, node_latent_dim)
-                or (batch_size, node_cnt, node_latent_dim)
-        output
-            node latent : (batch_size, sequence, node_cnt, node_dim)
-                            or (batch_size, node_cnt, node_dim)
-        '''
-        is_sequence = (x.dim() == 4)
-
-        if is_sequence == False:
-            x = x.unsqueeze(1)
-
-        b, s, n, _ = x.shape
-        x = x.reshape(b * s * n, -1)
-
-        for layer in self.layers:
-            x = layer(x)
-
-        if is_sequence == False:
-            x = x.reshape(b, n, -1)
-        else:
-            x = x.reshape(b, s, n, -1)
-        return x
-
-
-class GraphTemporalConv(nn.Module):
-    ''' 
-    description
-        Dense Graph Layer With 1D Convolution Layer
-        2 * Dense Graph Layer + 2 * 1D Convolution Layer
-    '''
-
-    def __init__(self, hidden_dim, node_cnt, seq_len):
-        '''
-        args
-            hidden_dim : hidden dimension of each layer
-            node_cnt : number of nodes
-            seq_len : length of sequence
-        '''
-        super().__init__()
-
-        self.kernel_size = 5
-        self.padding = self.kernel_size // 2
-
-        self.gcn1 = DenseGraphConv(
-            hidden_dim, hidden_dim, aggr='mean', bias=False)
-        self.gcn2 = DenseGraphConv(
-            hidden_dim, hidden_dim, aggr='mean', bias=False)
-
-        self.batch_norm1 = nn.BatchNorm1d(node_cnt)
-        self.batch_norm2 = nn.BatchNorm1d(node_cnt)
-
-        self.conv1 = nn.Conv1d(hidden_dim, hidden_dim, kernel_size=self.kernel_size,
-                               padding=self.padding)
-
-        self.conv2 = nn.Conv1d(hidden_dim, hidden_dim, kernel_size=self.kernel_size,
-                               padding=self.padding)
-
-        self.batch_norm3 = nn.BatchNorm1d(hidden_dim)
-        self.batch_norm4 = nn.BatchNorm1d(hidden_dim)
-
-    def forward(self, x, adj):
-        '''
-        args
-            x : (batch_size, seq, node_cnt, in_channels)
-            adj : (batch_size, seq, adj_channel, node_cnt, node_cnt)
-
-        output
-            x : (batch_size, seq, node_cnt, out_channels)
-        '''
-        b, s, n, c = x.shape  # b, s, n, c
-        adj_c = adj.shape[2]
-
-        x = x.reshape(b * s, n, c)
-
-        if adj_c == 1:
-            adj = adj.repeat(1, 1, 2, 1, 1)
-
-        adj = adj.permute(2, 0, 1, 3, 4).contiguous()  # b, s, n, n, c
-        adj = adj.view(2, b * s, n, n)
-
-        x = F.relu(self.gcn1(x, adj[0]))  # b * s, n, c
-        x = self.batch_norm1(x)
-        x = F.relu(self.gcn2(x, adj[1]))
-        x = self.batch_norm2(x)
-
-        x = x.reshape(b, s, n, c)
-
-        x = x.permute(0, 2, 3, 1).contiguous()  # b, n, c, s
-        x = x.view(b * n, c, s)  # b * n, c, s
-
-        x = F.relu(self.conv1(x))  # b * n, c, s
-        x = self.batch_norm3(x)
-        x = F.relu(self.conv2(x))
-        x = self.batch_norm4(x)
-        x = x.view(b, n, c, s)  # b, n, c, s
-        x = x.permute(0, 3, 1, 2).contiguous()  # b, s, n, c
-
-        return x
-
-
-class PopulationWeightedGraphModel(nn.Module):
+class PopulationWeightedGraphModelDLinear(nn.Module):
     '''
     description
         Graph Model with Moving Population
@@ -246,6 +75,7 @@ class PopulationWeightedGraphModel(nn.Module):
         # self.aggregator = nn.Conv1d(
             # kwargs['seq_len'], kwargs['pred_len'], kernel_size=1)
 
+        self.decompose = DecompositionLayer(kernel_size = 3)
         self.aggregator_d = nn.Linear(kwargs['seq_len'], kwargs['pred_len'])
         self.aggregator_g = nn.Linear(kwargs['seq_len'], kwargs['pred_len'])
 
@@ -272,22 +102,35 @@ class PopulationWeightedGraphModel(nn.Module):
             moving_pop = moving_pop + temporal.unsqueeze(-1).unsqueeze(-1)
             
         # (batch_size, seq, adj_channel, node_cnt, node_cnt)
-        adj, adj_recon = self.adj_module(moving_pop)
+        adj, adj_recon = self.adj_module(moving_pop) 
         b, s, n, c = x.shape
 
         # (batch_size, seq, node_cnt, node_latent_dim)
         x = self.graph_conv(x, adj)
+        
         # (batch_size, node_cnt, seq, node_latent_dim)
         x = x.permute(0, 2, 1, 3).contiguous()
+
         # (batch_size * node_cnt, seq, node_latent_dim)
         x = x.view(b * n, s, c)
+        # (batch_size * node_cnt, seq, node_latent_dim)
+        trend, residual = self.decompose(x)
 
-        x = self.aggregator(x)  # (batch_size * node_cnt, 1, node_latent_dim)
         # (batch_size * node_cnt, node_latent_dim, seq)
+        trend = trend.permute(0, 2, 1).contiguous()
+        residual = residual.permute(0, 2, 1).contiguous()
+        
+        # (batch_size * node_cnt, node_latent_dim, pred_len)
+        x = self.aggregator_d(trend) + self.aggregator_g(residual) 
+
+        # (batch_size * node_cnt, pred_len, node_latent_dim)
         x = x.permute(0, 2, 1).contiguous()
+        # (batch_size, node_cnt, pred_len, node_latent_dim)
+        x = x.view(b, n, -1, c)
 
         # (batch_size, pred_len, node_cnt, node_latent_dim)
-        x = x.view(b, -1, n, c)
+        x = x.permute(0, 2, 1, 3).contiguous()
+
         # (batch_size, pred_len, node_cnt, node_dim)
         y = self.node_decoder(x)
 
@@ -322,6 +165,12 @@ if __name__ == '__main__':
         # 'num_graph_layers': 3,
         'seq_len': 24,
         'pred_len': 1,
+        'spatial_columns' : [],
+        'spatial_cardinalities' : [],
+        'spatial_embedding_dim' : 2,
+        'temporal_columns' : [],
+        'temporal_cardinalities' : [],
+        'temporal_embedding_dim' : 2,
     }
 
     # Mok data
@@ -388,7 +237,7 @@ if __name__ == '__main__':
 
     #6 Intergrated Architecture
     print('#6 Intergrated Architecture test', end=': \t')
-    model = PopulationWeightedGraphModel(**hp)
+    model = PopulationWeightedGraphModelDLinear(**hp)
     tmp = model(node_data, mp_data)
     print(tmp[0].shape, tmp[1].shape)
 

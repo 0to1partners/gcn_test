@@ -1,3 +1,4 @@
 from .moving_pop_model import PopulationWeightedGraphModel
 from .sequence_model import WeightedGraphModel
 from .additional_info import AdditionalInfo
+from .moving_pop_dlinear import PopulationWeightedGraphModelDLinear

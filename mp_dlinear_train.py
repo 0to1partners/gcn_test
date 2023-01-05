@@ -23,7 +23,7 @@ import argparse
 import os 
 
 # addition of the path to the data/model folder
-from model import PopulationWeightedGraphModel, AdditionalInfo
+from model import PopulationWeightedGraphModel, AdditionalInfo, PopulationWeightedGraphModelDLinear
 # from dataset import MovingPopDailyModule
 from dataset import MovingPopWithAuxDataModule
 
@@ -36,7 +36,14 @@ class TrainModule(pl.LightningModule):
 
         self.aux_temporal = AdditionalInfo(kwargs['temporal_columns'], kwargs['temporal_cardinalities'], kwargs['temporal_embedding_dim'])
         self.aux_spatial = AdditionalInfo(kwargs['spatial_columns'], kwargs['spatial_cardinalities'], kwargs['spatial_embedding_dim'])
-        self.model = PopulationWeightedGraphModel(**kwargs)
+
+        if self.hparams['model'] == 'MP_DLINEAR':
+            self.model = PopulationWeightedGraphModelDLinear(**kwargs)
+        elif self.hparams['model'] == 'MP_STGCN':
+            self.model = PopulationWeightedGraphModel(**kwargs)
+        else :
+            raise NotImplementedError(f"{self.hparams['model']} : model not implemented")
+
         self.criterion = nn.MSELoss()
         self.lr = kwargs['lr']
 
@@ -126,6 +133,7 @@ class TrainModule(pl.LightningModule):
     @staticmethod
     def add_model_specific_args(parent_parser):
         parser = parent_parser.add_argument_group('ModelArgs')
+        parser.add_argument('--model', type=str, default='MP_DLINEAR')
         parser.add_argument('--adj_hidden_dim', type=int, default=4)
         parser.add_argument('--adj_num_layers', type=int, default=2)
         parser.add_argument('--adj_embedding_dim', type=int, default=2)
@@ -179,7 +187,8 @@ if __name__ == '__main__':
     parser = TrainModule.add_model_specific_args(parser)
     parser = TrainModule.add_train_specific_args(parser)
 
-    args = vars(parser.parse_args(args=[]))
+    # args = vars(parser.parse_args(args=[]))
+    args = vars(parser.parse_args())
     
     seed_everything(args['seed'])
 
@@ -221,4 +230,5 @@ if __name__ == '__main__':
 
     trainer.test(model, data_module)
     a = trainer.predict(model, data_module)
+
 
